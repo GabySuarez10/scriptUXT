@@ -196,7 +196,7 @@ enviarDatosAPI(datos);
 (function () {
   const SERVER_URL = API_URL.replace('/rutas/visitas', '');
   const MAX_POPUPS_PER_SESSION = 2;
-  const MIN_TIME_MS = 2 * 60 * 1000; // 2 minutes
+  const MIN_TIME_MS = 30 * 1000; // 30 segundos (reducido para pruebas; cambiar a 2 * 60 * 1000 en producción)
   const MIN_CLICKS_FIRST = 15;
   const MIN_SCROLLS_FIRST = 10;
   const ADDITIONAL_INTERACTIONS = 15;
@@ -259,20 +259,35 @@ enviarDatosAPI(datos);
 
   // ── Trigger logic ──
   function checkFeedbackTrigger() {
-    if (feedbackCount >= MAX_POPUPS_PER_SESSION) return;
+    if (feedbackCount >= MAX_POPUPS_PER_SESSION) {
+      console.log('[UXT Feedback] Límite de encuestas alcanzado (' + MAX_POPUPS_PER_SESSION + ')');
+      return;
+    }
     if (popupActive) return;
 
     const elapsed = Date.now() - pageLoadTime;
-    if (elapsed < MIN_TIME_MS) return;
+    const secondsElapsed = Math.round(elapsed / 1000);
 
-    if (feedbackCount === 0) {
-      // First popup: need 15 clicks OR 10 scrolls
-      if (sessionClicks < MIN_CLICKS_FIRST && sessionScrolls < MIN_SCROLLS_FIRST) return;
-    } else {
-      // Subsequent popups: need 15 additional interactions
-      if (interactionsAfterLast < ADDITIONAL_INTERACTIONS) return;
+    if (elapsed < MIN_TIME_MS) {
+      console.log('[UXT Feedback] Tiempo insuficiente: ' + secondsElapsed + 's / ' + (MIN_TIME_MS / 1000) + 's | Clics: ' + sessionClicks + ' | Scrolls: ' + sessionScrolls);
+      return;
     }
 
+    if (feedbackCount === 0) {
+      // First popup: need MIN_CLICKS_FIRST clicks OR MIN_SCROLLS_FIRST scrolls
+      if (sessionClicks < MIN_CLICKS_FIRST && sessionScrolls < MIN_SCROLLS_FIRST) {
+        console.log('[UXT Feedback] Interacciones insuficientes: Clics=' + sessionClicks + '/' + MIN_CLICKS_FIRST + ' | Scrolls=' + sessionScrolls + '/' + MIN_SCROLLS_FIRST);
+        return;
+      }
+    } else {
+      // Subsequent popups: need ADDITIONAL_INTERACTIONS more interactions
+      if (interactionsAfterLast < ADDITIONAL_INTERACTIONS) {
+        console.log('[UXT Feedback] Interacciones post-popup insuficientes: ' + interactionsAfterLast + '/' + ADDITIONAL_INTERACTIONS);
+        return;
+      }
+    }
+
+    console.log('[UXT Feedback] ✅ Condiciones cumplidas — mostrando encuesta #' + (feedbackCount + 1));
     showFeedbackPopup();
   }
 
