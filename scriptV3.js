@@ -76,12 +76,19 @@ function obtenerSelectorElemento(el) {
 
 document.addEventListener('click', function (e) {
   const infoPagina = obtenerInfoPagina();
+  
+  // Para mapas de calor, necesitamos calcular una coordenada X que funcione en cualquier resolución.
+  // La estrategia más confiable es centrar los clics relativos al ancho de la pantalla,
+  // y luego sumar la mitad del ancho de la captura esperada (1280px)
+  const offset_x = e.pageX - (window.innerWidth / 2);
+  const normalized_x = Math.round(1280 / 2 + offset_x);
+
   const datosClic = {
     ...infoPagina,
     tipo_evento: 'clic',
     elemento: obtenerSelectorElemento(e.target),
-    posicion_x: e.clientX,
-    posicion_y: e.clientY,
+    posicion_x: normalized_x,
+    posicion_y: Math.round(e.pageY),
     timestamp: new Date().toISOString()
   };
 
@@ -196,16 +203,17 @@ enviarDatosAPI(datos);
 (function () {
   const SERVER_URL = API_URL.replace('/rutas/visitas', '');
   const MAX_POPUPS_PER_SESSION = 2;
-  const MIN_TIME_MS = 30 * 1000; // 30 segundos (reducido para pruebas; cambiar a 2 * 60 * 1000 en producción)
-  const MIN_CLICKS_FIRST = 15;
-  const MIN_SCROLLS_FIRST = 10;
-  const ADDITIONAL_INTERACTIONS = 15;
+  const TRIGGER_CLICKS = 15;
+  const TRIGGER_SCROLLS = 10;
+  const TRIGGER_TIME_MS = 10 * 60 * 1000; // 10 minutos
 
   // ── Session state ──
   const sessionKey = 'uxt_fb_session';
   const countKey = 'uxt_fb_count';
   const questionsKey = 'uxt_fb_questions';
-  const interactionsAfterKey = 'uxt_fb_interactions_after';
+  const clicksKey = 'uxt_fb_clicks';
+  const scrollsKey = 'uxt_fb_scrolls';
+  const timeKey = 'uxt_fb_time_start';
 
   // Generate or retrieve session ID
   let sessionId = sessionStorage.getItem(sessionKey);
@@ -216,13 +224,17 @@ enviarDatosAPI(datos);
 
   let feedbackCount = parseInt(sessionStorage.getItem(countKey) || '0', 10);
   let shownQuestions = JSON.parse(sessionStorage.getItem(questionsKey) || '[]');
-  let interactionsAfterLast = parseInt(sessionStorage.getItem(interactionsAfterKey) || '0', 10);
-  let popupActive = false;
+  
+  let clicksSinceLast = parseInt(sessionStorage.getItem(clicksKey) || '0', 10);
+  let scrollsSinceLast = parseInt(sessionStorage.getItem(scrollsKey) || '0', 10);
+  
+  let timeStart = parseInt(sessionStorage.getItem(timeKey) || '0', 10);
+  if (!timeStart) {
+    timeStart = Date.now();
+    sessionStorage.setItem(timeKey, String(timeStart));
+  }
 
-  // Interaction counters (session-level)
-  let sessionClicks = 0;
-  let sessionScrolls = 0;
-  const pageLoadTime = Date.now();
+  let popupActive = false;
 
   // ── Question Bank ──
   const questionBank = [
@@ -240,55 +252,45 @@ enviarDatosAPI(datos);
 
   // ── Increment counters from existing event listeners ──
   document.addEventListener('click', function () {
-    sessionClicks++;
     if (!popupActive) {
-      interactionsAfterLast++;
-      sessionStorage.setItem(interactionsAfterKey, String(interactionsAfterLast));
+      clicksSinceLast++;
+      sessionStorage.setItem(clicksKey, String(clicksSinceLast));
       checkFeedbackTrigger();
     }
   });
 
   window.addEventListener('scroll', function () {
-    sessionScrolls++;
     if (!popupActive) {
-      interactionsAfterLast++;
-      sessionStorage.setItem(interactionsAfterKey, String(interactionsAfterLast));
+      scrollsSinceLast++;
+      sessionStorage.setItem(scrollsKey, String(scrollsSinceLast));
       checkFeedbackTrigger();
     }
   });
 
+  // Check time periodically even if there are no interactions
+  setInterval(function() {
+    if (!popupActive && feedbackCount < MAX_POPUPS_PER_SESSION) {
+      checkFeedbackTrigger();
+    }
+  }, 5000);
+
   // ── Trigger logic ──
   function checkFeedbackTrigger() {
     if (feedbackCount >= MAX_POPUPS_PER_SESSION) {
-      console.log('[UXT Feedback] Límite de encuestas alcanzado (' + MAX_POPUPS_PER_SESSION + ')');
       return;
     }
     if (popupActive) return;
 
-    const elapsed = Date.now() - pageLoadTime;
-    const secondsElapsed = Math.round(elapsed / 1000);
+    const elapsed = Date.now() - timeStart;
+    
+    const conditionClicks = clicksSinceLast >= TRIGGER_CLICKS;
+    const conditionScrolls = scrollsSinceLast >= TRIGGER_SCROLLS;
+    const conditionTime = elapsed >= TRIGGER_TIME_MS;
 
-    if (elapsed < MIN_TIME_MS) {
-      console.log('[UXT Feedback] Tiempo insuficiente: ' + secondsElapsed + 's / ' + (MIN_TIME_MS / 1000) + 's | Clics: ' + sessionClicks + ' | Scrolls: ' + sessionScrolls);
-      return;
+    if (conditionClicks || conditionScrolls || conditionTime) {
+      console.log(`[UXT Feedback] ✅ Condición cumplida: Clics(${clicksSinceLast}/${TRIGGER_CLICKS}), Scrolls(${scrollsSinceLast}/${TRIGGER_SCROLLS}), Tiempo(${Math.round(elapsed/1000)}s/${TRIGGER_TIME_MS/1000}s)`);
+      showFeedbackPopup();
     }
-
-    if (feedbackCount === 0) {
-      // First popup: need MIN_CLICKS_FIRST clicks OR MIN_SCROLLS_FIRST scrolls
-      if (sessionClicks < MIN_CLICKS_FIRST && sessionScrolls < MIN_SCROLLS_FIRST) {
-        console.log('[UXT Feedback] Interacciones insuficientes: Clics=' + sessionClicks + '/' + MIN_CLICKS_FIRST + ' | Scrolls=' + sessionScrolls + '/' + MIN_SCROLLS_FIRST);
-        return;
-      }
-    } else {
-      // Subsequent popups: need ADDITIONAL_INTERACTIONS more interactions
-      if (interactionsAfterLast < ADDITIONAL_INTERACTIONS) {
-        console.log('[UXT Feedback] Interacciones post-popup insuficientes: ' + interactionsAfterLast + '/' + ADDITIONAL_INTERACTIONS);
-        return;
-      }
-    }
-
-    console.log('[UXT Feedback] ✅ Condiciones cumplidas — mostrando encuesta #' + (feedbackCount + 1));
-    showFeedbackPopup();
   }
 
   // ── Pick random question ──
@@ -333,8 +335,15 @@ enviarDatosAPI(datos);
     // Update counters for session
     feedbackCount++;
     sessionStorage.setItem(countKey, String(feedbackCount));
-    interactionsAfterLast = 0;
-    sessionStorage.setItem(interactionsAfterKey, '0');
+    
+    // Reset individual counters for the next popup
+    clicksSinceLast = 0;
+    scrollsSinceLast = 0;
+    timeStart = Date.now();
+    
+    sessionStorage.setItem(clicksKey, '0');
+    sessionStorage.setItem(scrollsKey, '0');
+    sessionStorage.setItem(timeKey, String(timeStart));
   }
 
   // ── Listen to iframe close message ──
