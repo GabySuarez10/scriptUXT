@@ -67,52 +67,33 @@ async function enviarDatosAPI(datos) {
 
 function obtenerSelectorElemento(el) {
   if (!el) return 'unknown';
-
   const tag = el.tagName.toLowerCase();
   const id = el.id ? `#${el.id}` : '';
-  const clases = el.classList.length
-    ? '.' + [...el.classList].join('.')
-    : '';
-
-  const texto = el.innerText
-    ? el.innerText.trim().slice(0, 30)
-    : '';
-
+  const clases = el.classList.length ? '.' + [...el.classList].join('.') : '';
+  const texto = el.innerText ? el.innerText.trim().slice(0, 30) : '';
   return `${tag}${id}${clases}${texto ? ` ("${texto}")` : ''}`;
 }
 
 document.addEventListener('click', function (e) {
-
   const infoPagina = obtenerInfoPagina();
+  
+  // Para mapas de calor, necesitamos calcular una coordenada X que funcione en cualquier resolución.
+  // La estrategia más confiable es centrar los clics relativos al ancho de la pantalla,
+  // y luego sumar la mitad del ancho de la captura esperada (1280px)
+  const offset_x = e.pageX - (window.innerWidth / 2);
+  const normalized_x = Math.round(1280 / 2 + offset_x);
 
   const datosClic = {
-
     ...infoPagina,
-
     tipo_evento: 'clic',
-
     elemento: obtenerSelectorElemento(e.target),
-
-    // Coordenadas reales de toda la página
-    posicion_x: Math.round(e.pageX),
-
+    posicion_x: normalized_x,
     posicion_y: Math.round(e.pageY),
-
-    // Datos adicionales útiles para escalar heatmaps
-    viewport_width: window.innerWidth,
-
-    viewport_height: window.innerHeight,
-
-    page_width: document.documentElement.scrollWidth,
-
-    page_height: document.documentElement.scrollHeight,
-
     timestamp: new Date().toISOString()
   };
 
-  console.log('CLICK CAPTURADO:', datosClic);
-
-  // Aquí sigue tu lógica para enviar el evento
+  console.log('Clic registrado:', datosClic);
+  enviarDatosAPI(datosClic);
 });
 
 //RECOLECCIÓN DE SCROLL 
@@ -154,6 +135,68 @@ console.log(datos);
 enviarDatosAPI(datos);
 
 // ══════════════════════════════════════════════════════════════════════
+// CAPTURA DE PANTALLA (SNAPSHOT)
+// ══════════════════════════════════════════════════════════════════════
+(function () {
+  const html2canvasScript = document.createElement('script');
+  html2canvasScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+  html2canvasScript.async = true;
+  document.head.appendChild(html2canvasScript);
+
+  window.addEventListener('load', function () {
+    setTimeout(function () {
+      if (typeof html2canvas !== 'undefined') {
+        captureAndSendSnapshot();
+      } else {
+        let retries = 0;
+        const interval = setInterval(function () {
+          retries++;
+          if (typeof html2canvas !== 'undefined') {
+            clearInterval(interval);
+            captureAndSendSnapshot();
+          } else if (retries >= 5) {
+            clearInterval(interval);
+            console.error('No se pudo cargar html2canvas desde el CDN.');
+          }
+        }, 300);
+      }
+    }, 1500);
+  });
+
+  function captureAndSendSnapshot() {
+    html2canvas(document.body, {
+      useCORS: true,
+      scale: 0.5,
+      logging: false
+    }).then(function (canvas) {
+      const base64Image = canvas.toDataURL('image/jpeg', 0.6);
+      const snapshotApiUrl = API_URL.replace('/visitas', '/snapshot');
+
+      fetch(snapshotApiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({
+          url: window.location.href,
+          snapshot: base64Image
+        })
+      })
+        .then(function (res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          console.log('Captura de pantalla enviada exitosamente');
+        })
+        .catch(function (err) {
+          console.error('Error al enviar captura de pantalla:', err);
+        });
+    }).catch(function (err) {
+      console.error('Error al generar captura con html2canvas:', err);
+    });
+  }
+})();
+
+// ══════════════════════════════════════════════════════════════════════
 // FEEDBACK POPUP SYSTEM
 // ══════════════════════════════════════════════════════════════════════
 
@@ -181,10 +224,10 @@ enviarDatosAPI(datos);
 
   let feedbackCount = parseInt(sessionStorage.getItem(countKey) || '0', 10);
   let shownQuestions = JSON.parse(sessionStorage.getItem(questionsKey) || '[]');
-
+  
   let clicksSinceLast = parseInt(sessionStorage.getItem(clicksKey) || '0', 10);
   let scrollsSinceLast = parseInt(sessionStorage.getItem(scrollsKey) || '0', 10);
-
+  
   let timeStart = parseInt(sessionStorage.getItem(timeKey) || '0', 10);
   if (!timeStart) {
     timeStart = Date.now();
@@ -225,7 +268,7 @@ enviarDatosAPI(datos);
   });
 
   // Check time periodically even if there are no interactions
-  setInterval(function () {
+  setInterval(function() {
     if (!popupActive && feedbackCount < MAX_POPUPS_PER_SESSION) {
       checkFeedbackTrigger();
     }
@@ -239,13 +282,13 @@ enviarDatosAPI(datos);
     if (popupActive) return;
 
     const elapsed = Date.now() - timeStart;
-
+    
     const conditionClicks = clicksSinceLast >= TRIGGER_CLICKS;
     const conditionScrolls = scrollsSinceLast >= TRIGGER_SCROLLS;
     const conditionTime = elapsed >= TRIGGER_TIME_MS;
 
     if (conditionClicks || conditionScrolls || conditionTime) {
-      console.log(`[UXT Feedback] ✅ Condición cumplida: Clics(${clicksSinceLast}/${TRIGGER_CLICKS}), Scrolls(${scrollsSinceLast}/${TRIGGER_SCROLLS}), Tiempo(${Math.round(elapsed / 1000)}s/${TRIGGER_TIME_MS / 1000}s)`);
+      console.log(`[UXT Feedback] ✅ Condición cumplida: Clics(${clicksSinceLast}/${TRIGGER_CLICKS}), Scrolls(${scrollsSinceLast}/${TRIGGER_SCROLLS}), Tiempo(${Math.round(elapsed/1000)}s/${TRIGGER_TIME_MS/1000}s)`);
       showFeedbackPopup();
     }
   }
@@ -292,12 +335,12 @@ enviarDatosAPI(datos);
     // Update counters for session
     feedbackCount++;
     sessionStorage.setItem(countKey, String(feedbackCount));
-
+    
     // Reset individual counters for the next popup
     clicksSinceLast = 0;
     scrollsSinceLast = 0;
     timeStart = Date.now();
-
+    
     sessionStorage.setItem(clicksKey, '0');
     sessionStorage.setItem(scrollsKey, '0');
     sessionStorage.setItem(timeKey, String(timeStart));
