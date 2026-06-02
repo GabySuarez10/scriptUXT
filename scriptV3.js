@@ -135,68 +135,6 @@ console.log(datos);
 enviarDatosAPI(datos);
 
 // ══════════════════════════════════════════════════════════════════════
-// CAPTURA DE PANTALLA (SNAPSHOT)
-// ══════════════════════════════════════════════════════════════════════
-(function () {
-  const html2canvasScript = document.createElement('script');
-  html2canvasScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
-  html2canvasScript.async = true;
-  document.head.appendChild(html2canvasScript);
-
-  window.addEventListener('load', function () {
-    setTimeout(function () {
-      if (typeof html2canvas !== 'undefined') {
-        captureAndSendSnapshot();
-      } else {
-        let retries = 0;
-        const interval = setInterval(function () {
-          retries++;
-          if (typeof html2canvas !== 'undefined') {
-            clearInterval(interval);
-            captureAndSendSnapshot();
-          } else if (retries >= 5) {
-            clearInterval(interval);
-            console.error('No se pudo cargar html2canvas desde el CDN.');
-          }
-        }, 300);
-      }
-    }, 1500);
-  });
-
-  function captureAndSendSnapshot() {
-    html2canvas(document.body, {
-      useCORS: true,
-      scale: 0.5,
-      logging: false
-    }).then(function (canvas) {
-      const base64Image = canvas.toDataURL('image/jpeg', 0.6);
-      const snapshotApiUrl = API_URL.replace('/visitas', '/snapshot');
-
-      fetch(snapshotApiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({
-          url: window.location.href,
-          snapshot: base64Image
-        })
-      })
-        .then(function (res) {
-          if (!res.ok) throw new Error('HTTP ' + res.status);
-          console.log('Captura de pantalla enviada exitosamente');
-        })
-        .catch(function (err) {
-          console.error('Error al enviar captura de pantalla:', err);
-        });
-    }).catch(function (err) {
-      console.error('Error al generar captura con html2canvas:', err);
-    });
-  }
-})();
-
-// ══════════════════════════════════════════════════════════════════════
 // FEEDBACK POPUP SYSTEM
 // ══════════════════════════════════════════════════════════════════════
 
