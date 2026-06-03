@@ -101,9 +101,9 @@ function enviarBatchClics() {
 
   console.log(`📤 [Clics] Enviando batch de ${clicsPendientes.length} clics...`);
 
-  clicsPendientes.forEach(function(datosClic) {
+  clicsPendientes.forEach(function (datosClic) {
     enviarDatosAPI(datosClic)
-      .catch(function(error) {
+      .catch(function (error) {
         console.error('[Clics] Error:', error);
         if (clicksRetryCount < CLICKS_CONFIG.MAX_RETRIES) {
           clicksRetryCount++;
@@ -122,65 +122,166 @@ function programarEnvioBatchClics() {
     clearTimeout(clicksBatchTimeout);
   }
 
-  clicksBatchTimeout = setTimeout(function() {
+  clicksBatchTimeout = setTimeout(function () {
     if (clicsPendientes.length > 0) {
       enviarBatchClics();
     }
   }, CLICKS_CONFIG.BATCH_TIMEOUT);
 }
 
-// ⭐ CAPTURA CON VALIDACIÓN ESTRICTA
+// ⭐ RECOLECCIÓN DE CLICS — FIX DEFINITIVO
+
 document.addEventListener('click', function (e) {
-  // ✅ USAR pageX/pageY QUE INCLUYEN SCROLL
-  const x = e.pageX;
-  const y = e.pageY;
 
-  // Validar que sean números válidos
-  if (typeof x !== 'number' || typeof y !== 'number' || isNaN(x) || isNaN(y)) {
-    console.warn('⚠️ [Clics] Coordenadas inválidas:', { x, y });
-    return;
+  try {
+
+    // ════════════════════════════════
+    // SCROLL ACUMULADO DE CONTENEDORES
+    // ════════════════════════════════
+
+    let accumulatedScrollTop = 0;
+
+    let parent = e.target;
+
+    while (parent && parent !== document.body) {
+
+      if (
+        parent.scrollTop &&
+        parent.scrollHeight > parent.clientHeight
+      ) {
+
+        accumulatedScrollTop += parent.scrollTop;
+
+      }
+
+      parent = parent.parentElement;
+
+    }
+
+    // ════════════════════════════════
+    // COORDENADAS ABSOLUTAS REALES
+    // ════════════════════════════════
+
+    const absoluteX =
+      e.clientX + window.scrollX;
+
+    const absoluteY =
+      e.clientY +
+      window.scrollY +
+      accumulatedScrollTop;
+
+    // Validación
+    if (
+      isNaN(absoluteX) ||
+      isNaN(absoluteY)
+    ) {
+
+      console.warn(
+        '⚠️ Coordenadas inválidas'
+      );
+
+      return;
+
+    }
+
+    // ════════════════════════════════
+    // ALTURA REAL DEL DOCUMENTO
+    // ════════════════════════════════
+
+    const realPageHeight = Math.max(
+
+      document.body.scrollHeight,
+      document.body.offsetHeight,
+
+      document.documentElement.scrollHeight,
+      document.documentElement.offsetHeight,
+
+      document.documentElement.clientHeight
+
+    );
+
+    const infoPagina =
+      obtenerInfoPagina();
+
+    const datosClic = {
+
+      ...infoPagina,
+
+      tipo_evento: 'clic',
+
+      elemento:
+        obtenerSelectorElemento(e.target),
+
+      // ✅ coordenadas finales
+      posicion_x:
+        Math.round(absoluteX),
+
+      posicion_y:
+        Math.round(absoluteY),
+
+      // viewport
+      viewport_width:
+        window.innerWidth,
+
+      viewport_height:
+        window.innerHeight,
+
+      // página real
+      page_width:
+        document.documentElement.scrollWidth,
+
+      page_height:
+        realPageHeight,
+
+      // scroll actual
+      scroll_x:
+        Math.round(window.scrollX),
+
+      scroll_y:
+        Math.round(window.scrollY),
+
+      timestamp:
+        new Date().toISOString()
+
+    };
+
+    console.log(
+      '🖱️ Click REAL:',
+      {
+        y: datosClic.posicion_y,
+        pageHeight: datosClic.page_height
+      }
+    );
+
+    // ════════════════════════════════
+    // ENCOLAR
+    // ════════════════════════════════
+
+    clicsPendientes.push(datosClic);
+
+    if (
+      clicsPendientes.length >=
+      CLICKS_CONFIG.BATCH_SIZE
+    ) {
+
+      enviarBatchClics();
+
+    } else {
+
+      programarEnvioBatchClics();
+
+    }
+
+  } catch (err) {
+
+    console.error(
+      '❌ Error capturando clic:',
+      err
+    );
+
   }
 
-  const infoPagina = obtenerInfoPagina();
-
-  const datosClic = {
-    ...infoPagina,
-    tipo_evento: 'clic',
-    elemento: obtenerSelectorElemento(e.target),
-
-    // ✅ COORDENADAS ABSOLUTAS DE LA PÁGINA (CON SCROLL)
-    posicion_x: Math.round(x),
-    posicion_y: Math.round(y),
-
-    // Información de la ventana y documento
-    viewport_width: window.innerWidth,
-    viewport_height: window.innerHeight,
-    page_width: document.documentElement.scrollWidth,
-    page_height: document.documentElement.scrollHeight,
-    
-    // Información de scroll
-    scroll_x: Math.round(window.scrollX),
-    scroll_y: Math.round(window.scrollY),
-
-    timestamp: new Date().toISOString()
-  };
-
-  console.log('🖱️ [Clics] Capturado:', {
-    posicion_y: datosClic.posicion_y,
-    scroll_y: datosClic.scroll_y,
-    page_height: datosClic.page_height
-  });
-
-  // Agregar al lote
-  clicsPendientes.push(datosClic);
-
-  if (clicsPendientes.length >= CLICKS_CONFIG.BATCH_SIZE) {
-    enviarBatchClics();
-  } else {
-    programarEnvioBatchClics();
-  }
-
-}, true); // Capture phase
+}, true);
 
 // ══════════════════════════════════════════════════════════════════════
 // RECOLECCIÓN DE SCROLL
@@ -221,16 +322,16 @@ window.addEventListener('scroll', function () {
 // ENVÍO AL CERRAR LA PÁGINA
 // ══════════════════════════════════════════════════════════════════════
 
-window.addEventListener('beforeunload', function() {
+window.addEventListener('beforeunload', function () {
   if (clicsPendientes.length > 0) {
     console.log('💾 [Page Unload] Enviando clics pendientes...');
-    clicsPendientes.forEach(function(datosClic) {
+    clicsPendientes.forEach(function (datosClic) {
       navigator.sendBeacon(API_URL, JSON.stringify(datosClic));
     });
   }
 });
 
-window.addEventListener('visibilitychange', function() {
+window.addEventListener('visibilitychange', function () {
   if (document.hidden && clicsPendientes.length > 0) {
     console.log('💾 [Visibility] Enviando clics pendientes...');
     enviarBatchClics();
@@ -252,7 +353,7 @@ enviarDatosAPI(datos);
 // ══════════════════════════════════════════════════════════════════════
 
 window.UXTracksDebug = {
-  getStats: function() {
+  getStats: function () {
     return {
       pendingClicks: clicsPendientes.length,
       pageHeight: document.documentElement.scrollHeight,
@@ -260,11 +361,11 @@ window.UXTracksDebug = {
       viewportHeight: window.innerHeight
     };
   },
-  forceSend: function() {
+  forceSend: function () {
     enviarBatchClics();
     console.log('✅ Datos forzados a enviar');
   },
-  testClick: function() {
+  testClick: function () {
     console.log('📍 Haz clic en cualquier lugar para ver las coordenadas');
   }
 };
