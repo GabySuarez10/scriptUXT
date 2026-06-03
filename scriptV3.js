@@ -1,7 +1,11 @@
 const API_URL = 'https://uxt-api-1.onrender.com/rutas/visitas'
 
 // ;const API_URL = 'http://localhost:3000/rutas/visitas';
-console.log("algo")
+console.log("UXTracks Analytics Script Inicializado")
+
+// ══════════════════════════════════════════════════════════════════════
+// UTILIDADES BÁSICAS
+// ══════════════════════════════════════════════════════════════════════
 
 function getUserID() {
   const STORAGE_KEY = "my_analytics_uid";
@@ -44,7 +48,8 @@ async function enviarDatosAPI(datos) {
         'Content-Type': 'application/json',
         'Accept': 'application/json'
       },
-      body: JSON.stringify(datos)
+      body: JSON.stringify(datos),
+      keepalive: true // Importante para que se envíe incluso si se cierra la página
     });
 
     if (!response.ok) {
@@ -63,40 +68,113 @@ async function enviarDatosAPI(datos) {
   }
 }
 
-//RECOLECCIÓN DE CLICS
+// ══════════════════════════════════════════════════════════════════════
+// RECOLECCIÓN DE CLICS CON BATCHING
+// ══════════════════════════════════════════════════════════════════════
+
+const CLICKS_CONFIG = {
+  BATCH_SIZE: 5,        // Enviar cada 5 clics
+  BATCH_TIMEOUT: 8000,  // O cada 8 segundos
+  MAX_RETRIES: 3
+};
+
+let clicsPendientes = [];
+let clicksBatchTimeout = null;
+let clicksRetryCount = 0;
 
 function obtenerSelectorElemento(el) {
   if (!el) return 'unknown';
+
   const tag = el.tagName.toLowerCase();
   const id = el.id ? `#${el.id}` : '';
-  const clases = el.classList.length ? '.' + [...el.classList].join('.') : '';
-  const texto = el.innerText ? el.innerText.trim().slice(0, 30) : '';
+  const clases = el.classList.length
+    ? '.' + [...el.classList].join('.')
+    : '';
+
+  const texto = el.innerText
+    ? el.innerText.trim().slice(0, 30)
+    : '';
+
   return `${tag}${id}${clases}${texto ? ` ("${texto}")` : ''}`;
 }
 
+function enviarBatchClics() {
+  if (clicsPendientes.length === 0) return;
+
+  console.log(`[Clics] Enviando batch de ${clicsPendientes.length} clics...`);
+
+  // Enviar cada clic individualmente o como lote (depende de tu API)
+  clicsPendientes.forEach(function (datosClic) {
+    enviarDatosAPI(datosClic)
+      .catch(function (error) {
+        console.error('[Clics] Error al enviar clic:', error);
+        // Reintentar máximo 3 veces
+        if (clicksRetryCount < CLICKS_CONFIG.MAX_RETRIES) {
+          clicksRetryCount++;
+          console.log(`[Clics] Reintentando (${clicksRetryCount}/${CLICKS_CONFIG.MAX_RETRIES})...`);
+          setTimeout(enviarBatchClics, 2000 * clicksRetryCount);
+        }
+      });
+  });
+
+  // Limpiar array
+  clicsPendientes = [];
+  clicksRetryCount = 0;
+}
+
+function programarEnvioBatchClics() {
+  if (clicksBatchTimeout) {
+    clearTimeout(clicksBatchTimeout);
+  }
+
+  clicksBatchTimeout = setTimeout(function () {
+    if (clicsPendientes.length > 0) {
+      enviarBatchClics();
+    }
+  }, CLICKS_CONFIG.BATCH_TIMEOUT);
+}
+
 document.addEventListener('click', function (e) {
+
   const infoPagina = obtenerInfoPagina();
-  
-  // Para mapas de calor, necesitamos calcular una coordenada X que funcione en cualquier resolución.
-  // La estrategia más confiable es centrar los clics relativos al ancho de la pantalla,
-  // y luego sumar la mitad del ancho de la captura esperada (1280px)
-  const offset_x = e.pageX - (window.innerWidth / 2);
-  const normalized_x = Math.round(1280 / 2 + offset_x);
 
   const datosClic = {
     ...infoPagina,
     tipo_evento: 'clic',
     elemento: obtenerSelectorElemento(e.target),
-    posicion_x: normalized_x,
+
+    // ✅ COORDENADAS CORRECTAS - pageX/pageY incluyen scroll
+    posicion_x: Math.round(e.pageX),
     posicion_y: Math.round(e.pageY),
+
+    // Datos adicionales útiles para escalar heatmaps
+    viewport_width: window.innerWidth,
+    viewport_height: window.innerHeight,
+    page_width: document.documentElement.scrollWidth,
+    page_height: document.documentElement.scrollHeight,
+
     timestamp: new Date().toISOString()
   };
 
-  console.log('Clic registrado:', datosClic);
-  enviarDatosAPI(datosClic);
-});
+  console.log('[Clics] Clic capturado:', datosClic);
 
-//RECOLECCIÓN DE SCROLL 
+  // Agregar al lote pendiente
+  clicsPendientes.push(datosClic);
+
+  // Si alcanzamos el tamaño del batch, enviar inmediatamente
+  if (clicsPendientes.length >= CLICKS_CONFIG.BATCH_SIZE) {
+    enviarBatchClics();
+  } else {
+    // Si no, programar envío después de BATCH_TIMEOUT
+    programarEnvioBatchClics();
+  }
+
+}, true); // Usar capture phase para asegurar que capturamos todos los clics
+
+// ══════════════════════════════════════════════════════════════════════
+// RECOLECCIÓN DE SCROLL
+// ══════════════════════════════════════════════════════════════════════
+
 let scrollTimeout = null;
 let ultimoScroll = 0;
 
@@ -123,78 +201,41 @@ window.addEventListener('scroll', function () {
       timestamp: new Date().toISOString()
     };
 
-    console.log('Scroll registrado:', datosScroll);
+    console.log('[Scrolls] Scroll registrado:', datosScroll);
     enviarDatosAPI(datosScroll);
   }, 300);
+}, { passive: true });
+
+// ══════════════════════════════════════════════════════════════════════
+// ENVÍO DE DATOS AL CERRAR LA PÁGINA
+// ══════════════════════════════════════════════════════════════════════
+
+window.addEventListener('beforeunload', function () {
+  // Enviar clics pendientes antes de cerrar
+  if (clicsPendientes.length > 0) {
+    console.log('[Page Unload] Enviando clics pendientes...');
+    clicsPendientes.forEach(function (datosClic) {
+      navigator.sendBeacon(API_URL, JSON.stringify(datosClic));
+    });
+  }
 });
+
+window.addEventListener('visibilitychange', function () {
+  if (document.hidden && clicsPendientes.length > 0) {
+    console.log('[Visibility Change] Enviando clics pendientes...');
+    enviarBatchClics();
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// REPORTE INICIAL DE VISITA
+// ══════════════════════════════════════════════════════════════════════
 
 const datos = obtenerInfoPagina();
 datos.tipo_evento = 'visita';
 datos.timestamp = new Date().toISOString();
-console.log(datos);
+console.log('[Visita] Datos iniciales:', datos);
 enviarDatosAPI(datos);
-
-// ══════════════════════════════════════════════════════════════════════
-// CAPTURA DE PANTALLA (SNAPSHOT)
-// ══════════════════════════════════════════════════════════════════════
-(function () {
-  const html2canvasScript = document.createElement('script');
-  html2canvasScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
-  html2canvasScript.async = true;
-  document.head.appendChild(html2canvasScript);
-
-  window.addEventListener('load', function () {
-    setTimeout(function () {
-      if (typeof html2canvas !== 'undefined') {
-        captureAndSendSnapshot();
-      } else {
-        let retries = 0;
-        const interval = setInterval(function () {
-          retries++;
-          if (typeof html2canvas !== 'undefined') {
-            clearInterval(interval);
-            captureAndSendSnapshot();
-          } else if (retries >= 5) {
-            clearInterval(interval);
-            console.error('No se pudo cargar html2canvas desde el CDN.');
-          }
-        }, 300);
-      }
-    }, 1500);
-  });
-
-  function captureAndSendSnapshot() {
-    html2canvas(document.body, {
-      useCORS: true,
-      scale: 0.5,
-      logging: false
-    }).then(function (canvas) {
-      const base64Image = canvas.toDataURL('image/jpeg', 0.6);
-      const snapshotApiUrl = API_URL.replace('/visitas', '/snapshot');
-
-      fetch(snapshotApiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({
-          url: window.location.href,
-          snapshot: base64Image
-        })
-      })
-        .then(function (res) {
-          if (!res.ok) throw new Error('HTTP ' + res.status);
-          console.log('Captura de pantalla enviada exitosamente');
-        })
-        .catch(function (err) {
-          console.error('Error al enviar captura de pantalla:', err);
-        });
-    }).catch(function (err) {
-      console.error('Error al generar captura con html2canvas:', err);
-    });
-  }
-})();
 
 // ══════════════════════════════════════════════════════════════════════
 // FEEDBACK POPUP SYSTEM
@@ -224,10 +265,10 @@ enviarDatosAPI(datos);
 
   let feedbackCount = parseInt(sessionStorage.getItem(countKey) || '0', 10);
   let shownQuestions = JSON.parse(sessionStorage.getItem(questionsKey) || '[]');
-  
+
   let clicksSinceLast = parseInt(sessionStorage.getItem(clicksKey) || '0', 10);
   let scrollsSinceLast = parseInt(sessionStorage.getItem(scrollsKey) || '0', 10);
-  
+
   let timeStart = parseInt(sessionStorage.getItem(timeKey) || '0', 10);
   if (!timeStart) {
     timeStart = Date.now();
@@ -268,7 +309,7 @@ enviarDatosAPI(datos);
   });
 
   // Check time periodically even if there are no interactions
-  setInterval(function() {
+  setInterval(function () {
     if (!popupActive && feedbackCount < MAX_POPUPS_PER_SESSION) {
       checkFeedbackTrigger();
     }
@@ -282,13 +323,13 @@ enviarDatosAPI(datos);
     if (popupActive) return;
 
     const elapsed = Date.now() - timeStart;
-    
+
     const conditionClicks = clicksSinceLast >= TRIGGER_CLICKS;
     const conditionScrolls = scrollsSinceLast >= TRIGGER_SCROLLS;
     const conditionTime = elapsed >= TRIGGER_TIME_MS;
 
     if (conditionClicks || conditionScrolls || conditionTime) {
-      console.log(`[UXT Feedback] ✅ Condición cumplida: Clics(${clicksSinceLast}/${TRIGGER_CLICKS}), Scrolls(${scrollsSinceLast}/${TRIGGER_SCROLLS}), Tiempo(${Math.round(elapsed/1000)}s/${TRIGGER_TIME_MS/1000}s)`);
+      console.log(`[UXT Feedback] ✅ Condición cumplida: Clics(${clicksSinceLast}/${TRIGGER_CLICKS}), Scrolls(${scrollsSinceLast}/${TRIGGER_SCROLLS}), Tiempo(${Math.round(elapsed / 1000)}s/${TRIGGER_TIME_MS / 1000}s)`);
       showFeedbackPopup();
     }
   }
@@ -335,12 +376,12 @@ enviarDatosAPI(datos);
     // Update counters for session
     feedbackCount++;
     sessionStorage.setItem(countKey, String(feedbackCount));
-    
+
     // Reset individual counters for the next popup
     clicksSinceLast = 0;
     scrollsSinceLast = 0;
     timeStart = Date.now();
-    
+
     sessionStorage.setItem(clicksKey, '0');
     sessionStorage.setItem(scrollsKey, '0');
     sessionStorage.setItem(timeKey, String(timeStart));
