@@ -385,7 +385,7 @@ console.log('🛠️ Debug: UXTracksDebug.getStats()');
   const SERVER_URL = API_URL.replace('/rutas/visitas', '');
   const MAX_POPUPS_PER_SESSION = 2;
   const TRIGGER_CLICKS = 15;
-  const TRIGGER_SCROLLS = 10;
+  const TRIGGER_SCROLLS = 20;
   const TRIGGER_TIME_MS = 10 * 60 * 1000;
 
   const sessionKey = 'uxt_fb_session';
