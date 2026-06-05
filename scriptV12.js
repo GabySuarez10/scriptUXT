@@ -575,8 +575,7 @@ console.log('🛠️ Debug: UXTracksDebug.getStats()');
           snapshot: snapshot,
           width: realWidth,
           height: realHeight
-        }),
-        keepalive: true
+        })
       }).then(function(r) {
         console.log('✅ UXTracks: Foto enviada al servidor, status:', r.status);
       }).catch(function(err) {
